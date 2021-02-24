@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -22,23 +24,88 @@ public class CovidAnalyzerTool {
     private TestReader testReader;
     private int amountOfFilesTotal;
     private AtomicInteger amountOfFilesProcessed;
+    
+    ArrayList<AnalyzerThread> hilos = new ArrayList<>();
 
     public CovidAnalyzerTool() {
         resultAnalyzer = new ResultAnalyzer();
         testReader = new TestReader();
         amountOfFilesProcessed = new AtomicInteger();
     }
-
-    public void processResultData() {
+    
+    public  void crearHilos(int n){
         amountOfFilesProcessed.set(0);
         List<File> resultFiles = getResultFileList();
         amountOfFilesTotal = resultFiles.size();
-        for (File resultFile : resultFiles) {
-            List<Result> results = testReader.readResultsFromFile(resultFile);
-            for (Result result : results) {
-                resultAnalyzer.addResult(result);
+        int amountOfFiles = amountOfFilesTotal/n;
+        int faltantes = amountOfFilesTotal % n;
+        int inicio = 0;
+        for(int i=0; i<n; i++){
+            if(i == n-1){
+                amountOfFiles += faltantes;
             }
-            amountOfFilesProcessed.incrementAndGet();
+            hilos.add(new AnalyzerThread(resultFiles.subList(inicio, inicio+amountOfFiles)));
+            inicio += amountOfFiles;
+        }
+    }
+    
+    public void ejecutarHilos(){
+        for(AnalyzerThread at: hilos){
+            at.start();
+        }
+    }
+    
+    public void pausarHilos() {
+        for (AnalyzerThread at : hilos) {
+            at.setPause();
+        }
+    }
+
+    public void activarHilos() {
+        for (AnalyzerThread at : hilos) {
+            at.setContinue();
+        }
+    }
+    
+    class AnalyzerThread extends Thread{
+        
+        List<File> resultFiles;
+        private boolean pause = true;
+        
+        public AnalyzerThread(List<File> resultFiles){
+            this.resultFiles = resultFiles;
+        }
+        
+        public void run() {
+
+            for (File resultFile : resultFiles) {
+                
+                synchronized (this) {
+                    while (pause) {
+                        try {
+                            this.wait();
+                        } catch (InterruptedException ex) {
+                            Logger.getLogger(CovidAnalyzerTool.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                    }
+                }
+                
+                List<Result> results = testReader.readResultsFromFile(resultFile);
+                for (Result result : results) {
+                    resultAnalyzer.addResult(result);
+                }
+                amountOfFilesProcessed.incrementAndGet();
+            }
+
+        }
+        
+        public synchronized void setPause() {
+            this.pause = true;
+        }
+
+        public synchronized void setContinue() {
+            this.pause = false;
+            notifyAll();
         }
     }
 
@@ -56,26 +123,18 @@ public class CovidAnalyzerTool {
     public Set<Result> getPositivePeople() {
         return resultAnalyzer.listOfPositivePeople();
     }
+    
+    public int getAmountOfFilesProcessed(){
+        return this.amountOfFilesProcessed.get();
+    }
+    
+    public int getAmountOfFilesTotal(){
+        return this.amountOfFilesTotal;
+    }
 
     /**
      * A main() so we can easily run these routing rules in our IDE
      */
-    public static void main(String... args) throws Exception {
-        CovidAnalyzerTool covidAnalyzerTool = new CovidAnalyzerTool();
-        Thread processingThread = new Thread(() -> covidAnalyzerTool.processResultData());
-        processingThread.start();
-        while (true) {
-            Scanner scanner = new Scanner(System.in);
-            String line = scanner.nextLine();
-            if (line.contains("exit"))
-                break;
-            String message = "Processed %d out of %d files.\nFound %d positive people:\n%s";
-            Set<Result> positivePeople = covidAnalyzerTool.getPositivePeople();
-            String affectedPeople = positivePeople.stream().map(Result::toString).reduce("", (s1, s2) -> s1 + "\n" + s2);
-            message = String.format(message, covidAnalyzerTool.amountOfFilesProcessed.get(), covidAnalyzerTool.amountOfFilesTotal, positivePeople.size(), affectedPeople);
-            System.out.println(message);
-        }
-    }
 
 }
 
